@@ -107,6 +107,8 @@ CREATE INDEX IF NOT EXISTS notes_lead ON notes(lead_id);
 function open() {
   fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
   const db = new Database(path.join(DATA_DIR, "crm.db"));
+  // Several processes (e.g. parallel build workers) may open the file at once: wait for locks instead of failing.
+  db.pragma("busy_timeout = 5000");
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA);
@@ -114,8 +116,11 @@ function open() {
   if (n === 0) {
     const email = process.env.ADMIN_EMAIL || "admin@example.com";
     const password = process.env.ADMIN_PASSWORD || "admin123";
-    if (!process.env.ADMIN_PASSWORD) console.warn(`[crm] Created admin ${email} / ${password} — change this password now.`);
-    db.prepare("INSERT INTO users (name,email,password_hash,role) VALUES (?,?,?,'admin')").run("Admin", email, hashPassword(password));
+    // OR IGNORE: another process may have created the admin between our check and this insert.
+    const { changes } = db
+      .prepare("INSERT OR IGNORE INTO users (name,email,password_hash,role) VALUES (?,?,?,'admin')")
+      .run("Admin", email, hashPassword(password));
+    if (changes && !process.env.ADMIN_PASSWORD) console.warn(`[crm] Created admin ${email} / ${password} — change this password now.`);
   }
   return db;
 }
